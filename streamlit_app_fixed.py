@@ -3,16 +3,13 @@ from pathlib import Path
 from collections import Counter
 import pandas as pd
 import streamlit as st
-import numpy as np
 import plotly.express as px
-import sklearn
-import matplotlib.pyplot as plt
 
 
-st.set_page_config(
-    page_title="Explorador de clusters científicos",
-    page_icon="🧠",
-    layout="wide"
+st.title("Explorador interactivo de clusters científicos")
+st.write(
+    "Aplicación para explorar clusters temáticos obtenidos a partir de abstracts "
+    "científicos usando PySpark, TF-IDF y KMeans."
 )
 
 
@@ -137,6 +134,11 @@ def main():
     selected_cluster = st.sidebar.selectbox("Seleccionar cluster", clusters)
     n_examples = st.sidebar.slider("Cantidad de ejemplos", 3, 15, 5)
     search_term = st.sidebar.text_input("Buscar palabra en abstracts")
+    
+    selected_journal = "Todos"
+    if "journal" in docs.columns:
+    journal_options = ["Todos"] + sorted(docs["journal"].dropna().unique().tolist())
+    selected_journal = st.sidebar.selectbox("Filtrar por journal", journal_options)
 
     cluster_docs = docs[docs["cluster"] == selected_cluster].copy()
 
@@ -144,6 +146,8 @@ def main():
         cluster_docs = cluster_docs[
             cluster_docs["abstract_clean"].fillna("").str.contains(search_term, case=False, na=False)
         ]
+    if selected_journal != "Todos":
+        cluster_docs = cluster_docs[cluster_docs["journal"] == selected_journal]
 
     cluster_words = words[words["cluster"] == selected_cluster].sort_values("count", ascending=False)
     cluster_stats = stats[stats["cluster"] == selected_cluster]
@@ -165,69 +169,103 @@ def main():
             st.metric("Longitud promedio del abstract", "N/D")
 
     with col3:
-        if not cluster_words.empty:
-            top_signal = ", ".join(cluster_words["word"].head(3).tolist())
-            st.metric("Top términos", top_signal)
-        else:
-            st.metric("Top términos", "N/D")
+    if not cluster_words.empty:
+        top_signal = ", ".join(cluster_words["word"].head(5).tolist())
+        st.metric("Señal temática", top_signal)
+    else:
+        st.metric("Señal temática", "N/D")
 
     tab1, tab2, tab3, tab4 = st.tabs([
-        "Palabras clave",
-        "Ejemplos",
-        "Journals",
-        "Tendencia temporal"
+        "Señales léxicas",
+        "Documentos representativos",
+        "Distribución por journal",
+        "Evolución temporal"
     ])
-
+    
     with tab1:
         st.markdown("### Palabras más frecuentes")
         if cluster_words.empty:
             st.info("No hay palabras para mostrar en este cluster.")
         else:
-            st.dataframe(cluster_words.head(15), use_container_width=True)
-
-            fig, ax = plt.subplots(figsize=(8, 5))
-            plot_df = cluster_words.head(10).sort_values("count", ascending=True)
-            ax.barh(plot_df["word"], plot_df["count"])
-            ax.set_title(f"Top palabras del cluster {selected_cluster}")
-            ax.set_xlabel("Frecuencia")
-            ax.set_ylabel("Palabra")
-            st.pyplot(fig)
+            top_n_words = st.slider("Cantidad de palabras a mostrar", 5, 20, 10)
+        
+            plot_df = cluster_words.head(top_n_words).sort_values("count", ascending=True)
+        
+            fig = px.bar(
+                plot_df,
+                x="count",
+                y="word",
+                orientation="h",
+                title=f"Top palabras del cluster {selected_cluster}"
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
         st.markdown("### Ejemplos de documentos")
-        cols_to_show = [c for c in ["cord_uid", "title", "journal", "abstract_clean", "abstract_length"] if c in cluster_docs.columns]
-        st.dataframe(cluster_docs[cols_to_show].head(n_examples), use_container_width=True)
+       
+        sample_docs = cluster_docs.head(n_examples)
+        
+        if sample_docs.empty:
+            st.info("No hay documentos para mostrar con los filtros seleccionados.")
+        else:
+            for _, row in sample_docs.iterrows():
+                title = row["title"] if "title" in row and pd.notna(row["title"]) else "Sin título"
+                st.markdown(f"**{title}**")
+        
+                if "journal" in row and pd.notna(row["journal"]):
+                    st.caption(f"Journal: {row['journal']}")
+        
+                abstract = str(row["abstract_clean"]) if pd.notna(row["abstract_clean"]) else ""
+                short_abstract = abstract[:300] + "..." if len(abstract) > 300 else abstract
+                st.write(short_abstract)
+        
+                with st.expander("Ver abstract completo"):
+                    st.write(abstract)
+        
+                st.markdown("---")
 
     with tab3:
         st.markdown("### Journals más frecuentes")
         if "journal" in cluster_docs.columns:
             journal_counts = (
                 cluster_docs["journal"]
-                .fillna("NULL")
+                .fillna("Sin journal")
                 .value_counts()
+                .head(10)
                 .reset_index()
             )
             journal_counts.columns = ["journal", "count"]
-            st.dataframe(journal_counts.head(10), use_container_width=True)
+        
+            fig = px.bar(
+                journal_counts.sort_values("count", ascending=True),
+                x="count",
+                y="journal",
+                orientation="h",
+                title=f"Top journals del cluster {selected_cluster}"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+            st.dataframe(journal_counts, use_container_width=True)
         else:
             st.info("No hay columna 'journal' en los datos exportados.")
 
     with tab4:
         st.markdown("### Publicaciones por año")
         if yearly_counts.empty:
-            st.info("El notebook no exportó 'publish_year', así que no se puede mostrar la tendencia temporal.")
+            st.info("La tendencia temporal no está disponible porque la exportación no incluye la columna 'publish_year'.")
         else:
             cluster_year = yearly_counts[yearly_counts["cluster"] == selected_cluster]
             if cluster_year.empty:
                 st.info("No hay datos temporales para este cluster.")
             else:
-                fig, ax = plt.subplots(figsize=(8, 4))
-                ax.plot(cluster_year["publish_year"], cluster_year["doc_count"], marker="o")
-                ax.set_title(f"Publicaciones por año - cluster {selected_cluster}")
-                ax.set_xlabel("Año")
-                ax.set_ylabel("Cantidad de documentos")
-                ax.grid(alpha=0.3)
-                st.pyplot(fig)
+                fig = px.line(
+                    cluster_year,
+                    x="publish_year",
+                    y="doc_count",
+                    markers=True,
+                    title=f"Publicaciones por año - cluster {selected_cluster}"
+                )
+                st.plotly_chart(fig, use_container_width=True)
                 st.dataframe(cluster_year, use_container_width=True)
 
     st.markdown("---")
