@@ -81,7 +81,7 @@ This highlights real-world data challenges and practical cleaning strategies.
 ## Run Locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Streamlit.git
+git clone https://github.com/luciaalvarezuy/scientific-clusters-explorer.git
 cd Streamlit
 pip install -r requirements.txt
 streamlit run streamlit_app_fixed.py
