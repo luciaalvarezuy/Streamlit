@@ -1,4 +1,5 @@
 import re
+import joblib
 from pathlib import Path
 from collections import Counter
 
@@ -7,7 +8,7 @@ import streamlit as st
 import plotly.express as px
 
 
-st.set_page_config(page_title="Explorador de clusters científicos", layout="wide")
+st.set_page_config(page_title="Scientific Clusters Explorer", layout="wide")
 
 
 def find_file(filename: str) -> Path:
@@ -167,6 +168,40 @@ def build_representative_docs(docs: pd.DataFrame, words: pd.DataFrame, top_k: in
     return pd.DataFrame()
 
 
+@st.cache_resource
+def load_classifier():
+    vectorizer_path = find_file("tfidf_vectorizer.joblib")
+    classifier_path = find_file("cluster_classifier.joblib")
+
+    vectorizer = joblib.load(vectorizer_path)
+    classifier = joblib.load(classifier_path)
+
+    return vectorizer, classifier
+
+
+def predict_text(text: str, vectorizer, classifier):
+    X = vectorizer.transform([text])
+    pred_cluster = int(classifier.predict(X)[0])
+
+    confidence = None
+    top_predictions = None
+
+    if hasattr(classifier, "predict_proba"):
+        probs = classifier.predict_proba(X)[0]
+        confidence = float(probs.max())
+
+        classes = classifier.classes_
+        pred_df = pd.DataFrame({
+            "cluster": classes,
+            "probability": probs
+        }).sort_values("probability", ascending=False)
+
+        top_predictions = pred_df.head(3).copy()
+        top_predictions["cluster"] = top_predictions["cluster"].astype(int)
+
+    return pred_cluster, confidence, top_predictions
+
+
 def main():
     try:
         docs, stats = load_data()
@@ -178,36 +213,118 @@ def main():
     cluster_labels = build_cluster_labels(words)
     representative_docs = build_representative_docs(docs, words, top_k=10)
 
-    st.title("Explorador interactivo de clusters científicos")
+    try:
+        vectorizer, classifier = load_classifier()
+        classifier_ready = True
+    except Exception:
+        classifier_ready = False
+
+    st.title("Scientific Clusters Explorer")
     st.write(
-        "Aplicación para explorar clusters temáticos obtenidos a partir de abstracts "
-        "científicos usando PySpark, TF-IDF y KMeans."
+        "Interactive NLP application to explore thematic clusters of scientific abstracts "
+        "and classify new text in real time."
     )
 
-    with st.expander("Metodología"):
+    with st.expander("Methodology"):
         st.write("""
-        Los documentos fueron preprocesados y representados con TF-IDF.
-        Luego se aplicó KMeans para identificar grupos temáticos.
-        Esta app permite explorar cada cluster a través de sus términos,
-        documentos representativos y journals.
+        Documents were preprocessed and represented using TF-IDF.
+        KMeans was used to identify thematic clusters.
+        A lightweight supervised classifier was then trained on cluster assignments
+        to enable real-time prediction for new input text.
         """)
 
-    st.sidebar.header("Filtros")
+    st.markdown("---")
+    st.markdown("## 🧠 Live Text Classifier")
+
+    if classifier_ready:
+        user_input = st.text_area(
+            "Paste an abstract or short scientific text",
+            height=180,
+            placeholder="Example: Patients with COVID-19 were analyzed to evaluate risk factors, outcomes, and public health implications..."
+        )
+
+        if st.button("Predict topic"):
+            if user_input.strip():
+                pred_cluster, confidence, top_predictions = predict_text(user_input, vectorizer, classifier)
+
+                pred_label_row = cluster_labels[cluster_labels["cluster"] == pred_cluster]
+
+                if not pred_label_row.empty:
+                    pred_label = pred_label_row["cluster_label"].iloc[0]
+                    pred_explanation = pred_label_row["cluster_explanation"].iloc[0]
+                else:
+                    pred_label = f"Cluster {pred_cluster}"
+                    pred_explanation = "No explanation available."
+
+                col_a, col_b = st.columns(2)
+
+                with col_a:
+                    st.success(f"Predicted topic: {pred_label}")
+                    st.write(f"Predicted cluster: {pred_cluster}")
+
+                with col_b:
+                    if confidence is not None:
+                        st.metric("Confidence", round(confidence, 3))
+
+                st.info(pred_explanation)
+
+                if top_predictions is not None and not top_predictions.empty:
+                    merged_preds = top_predictions.merge(
+                        cluster_labels[["cluster", "cluster_label"]],
+                        on="cluster",
+                        how="left"
+                    )
+                    merged_preds["cluster_label"] = merged_preds["cluster_label"].fillna(
+                        merged_preds["cluster"].apply(lambda x: f"Cluster {x}")
+                    )
+                    merged_preds["probability"] = merged_preds["probability"].round(3)
+
+                    st.markdown("### Top predicted topics")
+                    st.dataframe(
+                        merged_preds[["cluster", "cluster_label", "probability"]],
+                        use_container_width=True
+                    )
+            else:
+                st.warning("Please paste some text before predicting.")
+    else:
+        st.info(
+            "Classifier not available yet. Add these files to your project:\n"
+            "- tfidf_vectorizer.joblib\n"
+            "- cluster_classifier.joblib"
+        )
+
+    st.markdown("---")
+    st.markdown("## 🔎 Cluster Explorer")
+
+    st.sidebar.header("Filters")
 
     clusters = sorted(docs["cluster"].dropna().unique().tolist())
 
-    journal_options = ["Todos"]
+    cluster_option_map = {}
+    for c in clusters:
+        row = cluster_labels[cluster_labels["cluster"] == c]
+        if not row.empty:
+            cluster_option_map[f"{c} — {row['cluster_label'].iloc[0]}"] = c
+        else:
+            cluster_option_map[f"{c} — Cluster {c}"] = c
+
+    journal_options = ["All"]
     if "journal" in docs.columns:
-        journal_counts_all = docs["journal"].fillna("Sin journal").value_counts()
+        journal_counts_all = docs["journal"].fillna("Unknown").value_counts()
         valid_journals = journal_counts_all[journal_counts_all > 2].index.tolist()
-        journal_options = ["Todos"] + sorted(valid_journals)
+        journal_options = ["All"] + sorted(valid_journals)
 
     with st.sidebar.form("filtros_form"):
-        selected_cluster = st.selectbox("Seleccionar cluster", clusters)
-        n_examples = st.slider("Cantidad de ejemplos", 3, 15, 5)
-        search_term = st.text_input("Buscar palabra en abstracts")
-        selected_journal = st.selectbox("Filtrar por journal", journal_options)
-        st.form_submit_button("Aplicar filtros")
+        selected_cluster_label = st.selectbox(
+            "Select cluster",
+            list(cluster_option_map.keys())
+        )
+        selected_cluster = cluster_option_map[selected_cluster_label]
+
+        n_examples = st.slider("Number of representative documents", 3, 15, 5)
+        search_term = st.text_input("Search keyword in abstracts")
+        selected_journal = st.selectbox("Filter by journal", journal_options)
+        st.form_submit_button("Apply filters")
 
     cluster_docs = docs[docs["cluster"] == selected_cluster].copy()
 
@@ -216,7 +333,7 @@ def main():
             cluster_docs["abstract_clean"].fillna("").str.contains(search_term, case=False, na=False)
         ]
 
-    if selected_journal != "Todos" and "journal" in cluster_docs.columns:
+    if selected_journal != "All" and "journal" in cluster_docs.columns:
         cluster_docs = cluster_docs[cluster_docs["journal"] == selected_journal]
 
     cluster_words = words[words["cluster"] == selected_cluster].sort_values("count", ascending=False)
@@ -236,38 +353,38 @@ def main():
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("Cantidad de documentos", len(cluster_docs))
+        st.metric("Documents", len(cluster_docs))
 
     with col2:
         if not cluster_stats.empty and "avg_abstract_length" in cluster_stats.columns:
             st.metric(
-                "Longitud promedio del abstract",
+                "Avg. abstract length",
                 round(float(cluster_stats["avg_abstract_length"].iloc[0]), 2)
             )
         else:
-            st.metric("Longitud promedio del abstract", "N/D")
+            st.metric("Avg. abstract length", "N/A")
 
     with col3:
         if not cluster_label_row.empty:
-            st.metric("Tema estimado", cluster_label_row["cluster_label"].iloc[0])
+            st.metric("Estimated topic", cluster_label_row["cluster_label"].iloc[0])
         else:
-            st.metric("Tema estimado", "N/D")
+            st.metric("Estimated topic", "N/A")
 
     if not cluster_words.empty:
         st.caption("Top signal words: " + ", ".join(cluster_words["word"].head(5).tolist()))
 
     tab1, tab2, tab3 = st.tabs([
-        "Señales léxicas",
-        "Documentos representativos",
-        "Distribución por journal"
+        "Top Words",
+        "Representative Documents",
+        "Journal Distribution"
     ])
 
     with tab1:
-        st.markdown("### Palabras más frecuentes")
+        st.markdown("### Most frequent words")
         if cluster_words.empty:
-            st.info("No hay palabras para mostrar en este cluster.")
+            st.info("No words available for this cluster.")
         else:
-            top_n_words = st.slider("Cantidad de palabras a mostrar", 5, 20, 10)
+            top_n_words = st.slider("Number of words to display", 5, 20, 10)
 
             plot_df = cluster_words.head(top_n_words).sort_values("count", ascending=True)
 
@@ -276,12 +393,13 @@ def main():
                 x="count",
                 y="word",
                 orientation="h",
-                title=f"Top palabras del cluster {selected_cluster}"
+                title=f"Top words for cluster {selected_cluster}"
             )
             st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(cluster_words.head(top_n_words), use_container_width=True)
 
     with tab2:
-        st.markdown("### Documentos más representativos")
+        st.markdown("### Most representative documents")
 
         sample_docs = representative_docs[
             representative_docs["cluster"] == selected_cluster
@@ -292,16 +410,16 @@ def main():
                 sample_docs["abstract_clean"].fillna("").str.contains(search_term, case=False, na=False)
             ]
 
-        if selected_journal != "Todos" and "journal" in sample_docs.columns:
+        if selected_journal != "All" and "journal" in sample_docs.columns:
             sample_docs = sample_docs[sample_docs["journal"] == selected_journal]
 
         sample_docs = sample_docs.head(n_examples)
 
         if sample_docs.empty:
-            st.info("No hay documentos para mostrar con los filtros seleccionados.")
+            st.info("No documents available for the selected filters.")
         else:
             for _, row in sample_docs.iterrows():
-                title = row["title"] if pd.notna(row["title"]) else "Sin título"
+                title = row["title"] if pd.notna(row["title"]) else "Untitled"
                 st.markdown(f"**{title}**")
 
                 if "journal" in row and pd.notna(row["journal"]):
@@ -314,17 +432,17 @@ def main():
                 if "representative_score" in row:
                     st.caption(f"Representative score: {row['representative_score']}")
 
-                with st.expander("Ver abstract completo"):
+                with st.expander("View full abstract"):
                     st.write(abstract)
 
                 st.markdown("---")
 
     with tab3:
-        st.markdown("### Journals más frecuentes")
+        st.markdown("### Most frequent journals")
         if "journal" in cluster_docs.columns:
             journal_counts = (
                 cluster_docs["journal"]
-                .fillna("Sin journal")
+                .fillna("Unknown")
                 .value_counts()
                 .head(10)
                 .reset_index()
@@ -336,18 +454,17 @@ def main():
                 x="count",
                 y="journal",
                 orientation="h",
-                title=f"Top journals del cluster {selected_cluster}"
+                title=f"Top journals for cluster {selected_cluster}"
             )
             st.plotly_chart(fig, use_container_width=True)
-
             st.dataframe(journal_counts, use_container_width=True)
         else:
-            st.info("No hay columna 'journal' en los datos exportados.")
+            st.info("No journal column available in exported data.")
 
     st.markdown("---")
     st.markdown(
-        "La app usa directamente los resultados exportados por el notebook: "
-        "`clustered_docs.csv` y `cluster_stats.csv`."
+        "This app uses notebook-exported results: "
+        "`clustered_docs.csv`, `cluster_stats.csv`, `tfidf_vectorizer.joblib`, and `cluster_classifier.joblib`."
     )
 
 
