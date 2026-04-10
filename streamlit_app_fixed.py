@@ -253,25 +253,6 @@ def main():
         else:
             st.info("No hay columna 'journal' en los datos exportados.")
 
-    with tab4:
-        st.markdown("### Publicaciones por año")
-        if yearly_counts.empty:
-            st.info("La tendencia temporal no está disponible porque la exportación no incluye la columna 'publish_year'.")
-        else:
-            cluster_year = yearly_counts[yearly_counts["cluster"] == selected_cluster]
-            if cluster_year.empty:
-                st.info("No hay datos temporales para este cluster.")
-            else:
-                fig = px.line(
-                    cluster_year,
-                    x="publish_year",
-                    y="doc_count",
-                    markers=True,
-                    title=f"Publicaciones por año - cluster {selected_cluster}"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(cluster_year, use_container_width=True)
-
     st.markdown("---")
     st.markdown(
         "La app usa directamente los resultados exportados por el notebook: "
