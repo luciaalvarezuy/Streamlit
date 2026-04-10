@@ -31,7 +31,7 @@ These notebooks document the full workflow, from raw data processing to clusteri
 
 The project uses the **CORD-19 (COVID-19 Open Research Dataset)**, which contains a large collection of scientific articles related to COVID-19 and related topics.
 
-You can download the dataset from Kaggle: [Download the dataset]([https://app-jsj8yakkavjbmwk9q539ye.streamlit.app/](https://www.kaggle.com/datasets/allen-institute-for-ai/CORD-19-research-challenge?resource=download))
+You can download the dataset from Kaggle: [Download the dataset](https://www.kaggle.com/datasets/allen-institute-for-ai/CORD-19-research-challenge?resource=download)
 
 
 ---
