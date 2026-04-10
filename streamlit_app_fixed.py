@@ -120,6 +120,15 @@ def main():
         "Aplicación para explorar clusters temáticos obtenidos a partir de abstracts "
         "científicos usando PySpark, TF-IDF y KMeans."
     )
+    
+    with st.expander("Metodología"):
+        st.write("""
+        Los documentos fueron preprocesados y representados con TF-IDF.
+        Luego se aplicó KMeans para identificar grupos temáticos.
+        Esta app permite explorar cada cluster a través de sus términos,
+        documentos representativos, journals y, cuando está disponible,
+        su evolución temporal.
+        """)
 
     st.sidebar.header("Filtros")
     clusters = sorted(docs["cluster"].dropna().unique().tolist())
