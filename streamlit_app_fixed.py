@@ -135,8 +135,10 @@ def main():
     clusters = sorted(docs["cluster"].dropna().unique().tolist())
     journal_options = ["Todos"]
     if "journal" in docs.columns:
-        journal_options = ["Todos"] + sorted(docs["journal"].dropna().unique().tolist())
-    
+        journal_counts = docs["journal"].value_counts()
+        valid_journals = journal_counts[journal_counts > 5].index.tolist()
+        journal_options = ["Todos"] + sorted(valid_journals)
+        
     with st.sidebar.form("filtros_form"):
         selected_cluster = st.selectbox("Seleccionar cluster", clusters)
         n_examples = st.slider("Cantidad de ejemplos", 3, 15, 5)
